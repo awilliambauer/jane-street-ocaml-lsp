@@ -17,6 +17,17 @@
 
   Display expanded ppx's in the hover window.
 
+- Improve document symbols (#1247)
+
+  Use the parse tree instead of the typed tree. This means that document
+  symbols will work even if the source code doesn't type check.
+
+  Include symbols at arbitrary depth.
+
+  Differentiate functions / types / variants / etc.
+
+  This now includes PPXs like `let%expect_test` or `let%bench` in the outline.
+
 ## Fixes
 
 - Detect document kind by looking at merlin's `suffixes` config.
@@ -27,6 +38,10 @@
 - Correctly accept the `--clientProcessId` flag. (#1242)
 
 - Disable automatic completion and signature help inside comments (#1246)
+
+- Includes a new optional/configurable option to toggle syntax documentation. If
+  toggled on, allows display of sytax documentation on hover tooltips. Can be
+  controlled via environment variables and by GUI for VS code. (#1218)
 
 # 1.17.0
 
