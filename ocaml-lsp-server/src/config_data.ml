@@ -6,6 +6,8 @@ module InlayHints = struct
     { hint_pattern_variables : bool
           [@key "hintPatternVariables"] [@default false]
     ; hint_let_bindings : bool [@key "hintLetBindings"] [@default false]
+    ; hint_function_params : bool [@key "hintFunctionParams"] [@default false]
+    ; hint_let_syntax_ppx : bool [@key "hintLetSyntaxPpx"] [@default false]
     }
   [@@deriving_inline yojson] [@@yojson.allow_extra_fields]
 
@@ -17,6 +19,8 @@ module InlayHints = struct
      | `Assoc field_yojsons as yojson -> (
        let hint_pattern_variables_field = ref Ppx_yojson_conv_lib.Option.None
        and hint_let_bindings_field = ref Ppx_yojson_conv_lib.Option.None
+       and hint_function_params_field = ref Ppx_yojson_conv_lib.Option.None
+       and hint_let_syntax_ppx_field = ref Ppx_yojson_conv_lib.Option.None
        and duplicates = ref []
        and extra = ref [] in
        let rec iter = function
@@ -37,6 +41,20 @@ module InlayHints = struct
                hint_let_bindings_field := Ppx_yojson_conv_lib.Option.Some fvalue
              | Ppx_yojson_conv_lib.Option.Some _ ->
                duplicates := field_name :: Ppx_yojson_conv_lib.( ! ) duplicates)
+           | "hintFunctionParams" -> (
+               match Ppx_yojson_conv_lib.( ! ) hint_function_params_field with
+               | Ppx_yojson_conv_lib.Option.None ->
+                 let fvalue = bool_of_yojson _field_yojson in
+                 hint_function_params_field := Ppx_yojson_conv_lib.Option.Some fvalue
+               | Ppx_yojson_conv_lib.Option.Some _ ->
+                 duplicates := field_name :: Ppx_yojson_conv_lib.( ! ) duplicates)
+           | "hintLetSyntaxPpx" -> (
+               match Ppx_yojson_conv_lib.( ! ) hint_let_syntax_ppx_field with
+               | Ppx_yojson_conv_lib.Option.None ->
+                 let fvalue = bool_of_yojson _field_yojson in
+                 hint_let_syntax_ppx_field := Ppx_yojson_conv_lib.Option.Some fvalue
+               | Ppx_yojson_conv_lib.Option.Some _ ->
+                 duplicates := field_name :: Ppx_yojson_conv_lib.( ! ) duplicates)
            | _ -> ());
            iter tail
          | [] -> ()
@@ -56,9 +74,11 @@ module InlayHints = struct
              (Ppx_yojson_conv_lib.( ! ) extra)
              yojson
          | [] ->
-           let hint_pattern_variables_value, hint_let_bindings_value =
+           let hint_pattern_variables_value, hint_let_bindings_value, hint_function_params_value, hint_let_syntax_ppx_value =
              ( Ppx_yojson_conv_lib.( ! ) hint_pattern_variables_field
-             , Ppx_yojson_conv_lib.( ! ) hint_let_bindings_field )
+             , Ppx_yojson_conv_lib.( ! ) hint_let_bindings_field
+             , Ppx_yojson_conv_lib.( ! ) hint_function_params_field
+             , Ppx_yojson_conv_lib.( ! ) hint_let_syntax_ppx_field)
            in
            { hint_pattern_variables =
                (match hint_pattern_variables_value with
@@ -68,6 +88,14 @@ module InlayHints = struct
                (match hint_let_bindings_value with
                | Ppx_yojson_conv_lib.Option.None -> false
                | Ppx_yojson_conv_lib.Option.Some v -> v)
+           ; hint_function_params =
+               (match hint_function_params_value with
+                | Ppx_yojson_conv_lib.Option.None -> false
+                | Ppx_yojson_conv_lib.Option.Some v -> v)
+           ; hint_let_syntax_ppx =
+               (match hint_let_syntax_ppx_value with
+                | Ppx_yojson_conv_lib.Option.None -> false
+                | Ppx_yojson_conv_lib.Option.Some v -> v)
            }))
      | _ as yojson ->
        Ppx_yojson_conv_lib.Yojson_conv_error.record_list_instead_atom
@@ -81,6 +109,8 @@ module InlayHints = struct
     (function
      | { hint_pattern_variables = v_hint_pattern_variables
        ; hint_let_bindings = v_hint_let_bindings
+       ; hint_function_params = v_hint_function_params
+       ; hint_let_syntax_ppx = v_hint_let_syntax_ppx
        } ->
        let bnds : (string * Ppx_yojson_conv_lib.Yojson.Safe.t) list = [] in
        let bnds =
@@ -89,6 +119,14 @@ module InlayHints = struct
        in
        let bnds =
          let arg = yojson_of_bool v_hint_pattern_variables in
+         ("hintPatternVariables", arg) :: bnds
+       in
+       let bnds =
+         let arg = yojson_of_bool v_hint_function_params in
+         ("hintPatternVariables", arg) :: bnds
+       in
+       let bnds =
+         let arg = yojson_of_bool v_hint_let_syntax_ppx in
          ("hintPatternVariables", arg) :: bnds
        in
        `Assoc bnds
@@ -603,7 +641,12 @@ let default =
   { codelens = Some { enable = false }
   ; extended_hover = Some { enable = false }
   ; inlay_hints =
-      Some { hint_pattern_variables = false; hint_let_bindings = false }
+    Some
+      { hint_pattern_variables = false
+      ; hint_let_bindings = false
+      ; hint_function_params = false
+      ; hint_let_syntax_ppx = false
+      }
   ; dune_diagnostics = Some { enable = true }
   ; syntax_documentation = Some { enable = false }
   }

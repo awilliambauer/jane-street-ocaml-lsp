@@ -1,7 +1,13 @@
 open Test.Import
 
-let apply_inlay_hints ?(path = "foo.ml") ?range
-    ?(hint_pattern_variables = false) ?(hint_let_bindings = false) ~source () =
+let apply_inlay_hints
+    ?(path = "foo.ml")
+    ?range
+    ?(hint_function_params = false)
+    ?(hint_pattern_variables = false)
+    ?(hint_let_bindings = false)
+    ?(hint_let_syntax_ppx = false)
+    ~source () =
   let range =
     match range with
     | Some r -> r
@@ -28,8 +34,10 @@ let apply_inlay_hints ?(path = "foo.ml") ?range
         (`Assoc
           [ ( "inlayHints"
             , `Assoc
-                [ ("hintPatternVariables", `Bool hint_pattern_variables)
+                [ ("hintFunctionParams", `Bool hint_function_params)
+                ; ("hintPatternVariables", `Bool hint_pattern_variables)
                 ; ("hintLetBindings", `Bool hint_let_bindings)
+                ; ("hintLetSyntaxPpx", `Bool hint_let_syntax_ppx)
                 ] )
           ])
       (InlayHint request)
@@ -62,34 +70,313 @@ let apply_inlay_hints ?(path = "foo.ml") ?range
   | None -> print_endline "No hints found"
 
 let%expect_test "optional argument" =
-  apply_inlay_hints ~source:"let f ?x () = x" ();
+  apply_inlay_hints ~hint_function_params:true ~source:"let f ?x () = x" ();
   [%expect {| let f ?x$: 'a option$ () = x |}]
+;;
 
 let%expect_test "optional argument with value" =
-  apply_inlay_hints ~source:"let f ?(x = 1) () = x" ();
+  apply_inlay_hints ~hint_function_params:true ~source:"let f ?(x = 1) () = x" ();
   [%expect {| let f ?(x$: int$ = 1) () = x |}]
+;;
 
 let%expect_test "labeled argument" =
-  apply_inlay_hints ~source:"let f ~x = x + 1" ();
+  apply_inlay_hints ~hint_function_params:true ~source:"let f ~x = x + 1" ();
   [%expect {| let f ~x$: int$ = x + 1 |}]
+;;
 
 let%expect_test "case argument" =
-  apply_inlay_hints ~source:"let f (Some x) = x + 1" ();
+  apply_inlay_hints ~hint_function_params:true ~source:"let f (Some x) = x + 1" ();
   [%expect {| let f (Some x$: int$) = x + 1 |}]
+;;
 
 let%expect_test "pattern variables" =
   let source = "let f x = match x with Some x -> x | None -> 0" in
-  apply_inlay_hints ~source ();
+  apply_inlay_hints ~hint_function_params:true ~source ();
   [%expect {| let f x$: int option$ = match x with Some x -> x | None -> 0 |}];
-
-  apply_inlay_hints ~hint_pattern_variables:true ~source ();
-  [%expect
-    {| let f x$: int option$ = match x with Some x$: int$ -> x | None -> 0 |}]
+  apply_inlay_hints ~hint_function_params:true ~hint_pattern_variables:true ~source ();
+  [%expect {| let f x$: int option$ = match x with Some x$: int$ -> x | None -> 0 |}]
+;;
 
 let%expect_test "let bindings" =
   let source = "let f () = let y = 0 in y" in
-  apply_inlay_hints ~source ();
+  apply_inlay_hints ~hint_function_params:true ~source ();
   [%expect {| let f () = let y = 0 in y |}];
-
-  apply_inlay_hints ~hint_let_bindings:true ~source ();
+  apply_inlay_hints ~hint_function_params:true ~hint_let_bindings:true ~source ();
   [%expect {| let f () = let y$: int$ = 0 in y |}]
+;;
+
+let%expect_test "everything off" =
+  apply_inlay_hints
+    ~source:
+      {|
+let foo x y =
+  let z = x, y in
+  match z with
+  | 0, b -> b
+  | _ -> 0
+;;|}
+    ();
+  [%expect
+    {|
+    let foo x y =
+      let z = x, y in
+      match z with
+      | 0, b -> b
+      | _ -> 0
+    ;;
+    |}]
+;;
+
+let%expect_test "function params only" =
+  apply_inlay_hints
+    ~hint_function_params:true
+    ~source:
+      {|
+let foo x y =
+  let z = x, y in
+  match z with
+  | 0, b -> b
+  | _ -> 0
+;;|}
+    ();
+  [%expect
+    {|
+    let foo x$: int$ y$: int$ =
+      let z = x, y in
+      match z with
+      | 0, b -> b
+      | _ -> 0
+    ;;
+    |}]
+;;
+
+let%expect_test "let bindings only" =
+  apply_inlay_hints
+    ~hint_let_bindings:true
+    ~source:
+      {|
+let foo x y =
+  let z = x, y in
+  match z with
+  | 0, b -> b
+  | _ -> 0
+;;|}
+    ();
+  [%expect
+    {|
+    let foo x y =
+      let z$: int * int$ = x, y in
+      match z with
+      | 0, b -> b
+      | _ -> 0
+    ;;
+    |}]
+;;
+
+let%expect_test "pattern variables only" =
+  apply_inlay_hints
+    ~hint_pattern_variables:true
+    ~source:
+      {|
+let foo x y =
+  let z = x, y in
+  match z with
+  | 0, b -> b
+  | _ -> 0
+;;|}
+    ();
+  [%expect
+    {|
+    let foo x y =
+      let z = x, y in
+      match z with
+      | 0, b$: int$ -> b
+      | _ -> 0
+    ;;
+    |}]
+;;
+
+let%expect_test "everything on" =
+  apply_inlay_hints
+    ~hint_let_bindings:true
+    ~hint_pattern_variables:true
+    ~hint_function_params:true
+    ~source:
+      {|
+let foo x y =
+  let z = x, y in
+  match z with
+  | 0, b -> b
+  | _ -> 0
+;;|}
+    ();
+  [%expect
+    {|
+    let foo x$: int$ y$: int$ =
+      let z$: int * int$ = x, y in
+      match z with
+      | 0, b$: int$ -> b
+      | _ -> 0
+    ;;
+    |}]
+;;
+
+let%expect_test "argument to function that uses [function]" =
+  apply_inlay_hints
+    ~source:
+      {|
+let bar a = function
+  | 0 -> 10
+  | _ -> -a
+;;|}
+    ();
+  [%expect
+    {|
+    let bar a = function
+      | 0 -> 10
+      | _ -> -a
+    ;;
+    |}];
+  apply_inlay_hints
+    ~hint_function_params:true
+    ~source:
+      {|
+    let bar a = function
+      | 0 -> 10
+      | _ -> -a
+    ;;|}
+    ();
+  [%expect
+    {|
+      let bar a$: int$ = function
+        | 0 -> 10
+        | _ -> -a
+      ;;
+      |}]
+;;
+
+let%expect_test "pattern variables in function that uses [function]" =
+  apply_inlay_hints
+    ~source:
+      {|
+let baz = function
+  | 0, b -> b
+  | _ -> 0
+;;|}
+    ();
+  [%expect
+    {|
+  let baz = function
+    | 0, b -> b
+    | _ -> 0
+  ;;
+  |}];
+  apply_inlay_hints
+    ~hint_pattern_variables:true
+    ~source:
+      {|
+let baz = function
+  | 0, b -> b
+  | _ -> 0
+;;|}
+    ();
+  [%expect
+    {|
+    let baz = function
+      | 0, b$: int$ -> b
+      | _ -> 0
+    ;;
+    |}]
+;;
+
+let%expect_test "let-syntax ppx annotations" =
+  (* Note: We can't test cases where we interleave [let open _] with the PPX because we
+     don't interpret them when running the test and so at the type stage the opens don't
+     exist. *)
+  let source =
+    {|
+      module First = struct module Let_syntax = struct end end
+      module Second = struct module Let_syntax = struct end end
+      module Reference = First
+
+      open First
+
+      let _ =
+        let%bind () = return () in
+        let%map () = return ()
+      ;;
+
+      let _ =
+        let open Second in
+        let%bind () = return () in
+        let%map () = return () in
+        return ()
+      ;;
+
+      open Reference
+
+      let _ =
+        let%bind () = return () in
+        let%map () = return () in
+        return ()
+      ;;
+
+      module Top_level = struct
+        module Nested = struct
+          module Let_syntax = struct end
+        end
+      end
+
+      open Top_level
+
+      let _ =
+        let open Nested in
+        let%bind () = return () in
+        let%map () = return () in
+        return ()
+      ;;
+    |}
+  in
+  apply_inlay_hints ~hint_let_syntax_ppx:true ~source ();
+  [%expect {|
+    module First = struct module Let_syntax = struct end end
+    module Second = struct module Let_syntax = struct end end
+    module Reference = First
+
+    open First
+
+    let _ =
+      let%bind$.Reference$ () = return () in
+      let%map$.Reference$ () = return ()
+    ;;
+
+    let _ =
+      let open Second in
+      let%bind$.Second$ () = return () in
+      let%map$.Second$ () = return () in
+      return ()
+    ;;
+
+    open Reference
+
+    let _ =
+      let%bind$.Reference$ () = return () in
+      let%map$.Reference$ () = return () in
+      return ()
+    ;;
+
+    module Top_level = struct
+      module Nested = struct
+        module Let_syntax = struct end
+      end
+    end
+
+    open Top_level
+
+    let _ =
+      let open Nested in
+      let%bind$.Nested$ () = return () in
+      let%map$.Nested$ () = return () in
+      return ()
+    ;;
+    |}]
