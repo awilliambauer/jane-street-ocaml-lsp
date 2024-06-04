@@ -128,6 +128,7 @@ module Drpc = Dune_rpc.V1
 
 (* OCaml frontend *)
 module Ast_iterator = Ocaml_parsing.Ast_iterator
+module Ast_mapper = Ocaml_parsing.Ast_mapper
 module Asttypes = Ocaml_parsing.Asttypes
 module Cmt_format = Ocaml_typing.Cmt_format
 module Ident = Ocaml_typing.Ident

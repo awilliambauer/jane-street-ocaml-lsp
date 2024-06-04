@@ -719,7 +719,40 @@ let x = { M . foo = 0 ; bar = "bar"}
     {|
     module <namespace|definition-0>M</0> = struct type <struct|definition-1>r</1> = { <property|-2>foo</2> : <type|-3>int</3> ; <property|-4>bar</4> : <type|-5>string</5> } end
 
-    let <variable|-6>x</6> = { <namespace|-7>M</7> . <property|-8>foo</8> = <number|-9>0</9> ; <property|-10>bar</10> = <string|-11>"bar"</11>} |}]
+    let <variable|-6>x</6> = { <namespace|-7>M</7> . <property|-8>foo</8> = <number|-9>0</9> ; <property|-10>bar</10> = "bar"}
+    |}]
+
+let%expect_test "ppx_string highlighting" =
+  (* Demonstates highlighting of interpolated ints, floats, identifiers, function
+     applications, polymorphic variants, and field acceses. Also shows that interpolated
+     highlighting is not applied in the presence of escaped quotes, since ppxlib doesn't
+     provide precise locations in that case. *)
+  test_semantic_tokens_full
+  @@ String.trim
+       {|
+open Core
+
+let x = 10
+let a = "17"
+let s1 = [%string "x = %{x#Int}"]
+let s2 = [%string "%{s1} is a string"]
+let s2 = [%string "\"%{s1}\" is a string"]
+let s3 = [%string "y = %{max (x + 2) (Int.of_string a)#Int}"]
+let s4 = [%string "%{((x, 17.2), Some 42, None)#Foo}"]
+let s5 = [%string "%{`A (x + x)#Bar} %{q.field1 ^ q.field2}"]
+      |};
+  [%expect {|
+    open <namespace|-0>Core</0>
+
+    let <variable|-1>x</1> = <number|-2>10</2>
+    let <variable|-3>a</3> = "17"
+    let <variable|-4>s1</4> = [%string "x = %{<variable|-5>x</5>#Int}"]
+    let <variable|-6>s2</6> = [%string "%{<variable|-7>s1</7>} is a string"]
+    let <variable|-8>s2</8> = [%string "\"%{s1}\" is a string"]
+    let <variable|-9>s3</9> = [%string "y = %{<function|-10>max</10> (<variable|-11>x</11> <function|-12>+</12> <number|-13>2</13>) (<namespace|-14>Int</14>.<function|-15>of_string</15> <variable|-16>a</16>)#Int}"]
+    let <variable|-17>s4</17> = [%string "%{((<variable|-18>x</18>, <number|-19>17.2</19>), <enumMember|-20>Some</20> <number|-21>42</21>, <enumMember|-22>None</22>)#Foo}"]
+    let <variable|-23>s5</23> = [%string "%{`A (<variable|-24>x</24> <function|-25>+</25> <variable|-26>x</26>)#Bar} %{<variable|-27>q</27>.<property|-28>field1</28> <function|-29>^</29> <variable|-30>q</30>.<property|-31>field2</31>}"]
+    |}]
 
 let%expect_test "operators" =
   test_semantic_tokens_full

@@ -275,6 +275,7 @@ end
 (** To traverse OCaml parsetree and produce semantic tokens. *)
 module Parsetree_fold (M : sig
   val source : string
+  val mconfig : Mconfig.t
 end) : sig
   val apply : Mreader.parsetree -> Tokens.t
 end = struct
@@ -496,13 +497,10 @@ end = struct
     self.attributes self ptype_attributes
 
   let const loc (constant : Parsetree.constant) =
-    let token_type =
-      match constant with
-      | Parsetree.Pconst_integer _ | Pconst_float _ ->
-        Token_type.of_builtin Number
-      | Pconst_char _ | Pconst_string _ -> Token_type.of_builtin String
-    in
-    add_token loc token_type Token_modifiers_set.empty
+    match constant with
+    | Parsetree.Pconst_integer _ | Pconst_float _ ->
+      add_token loc (Token_type.of_builtin Number) Token_modifiers_set.empty
+    | Pconst_char _ | Pconst_string _ -> ()
 
   let pexp_apply (self : Ast_iterator.iterator) (expr : Parsetree.expression)
       args =
@@ -536,6 +534,99 @@ end = struct
       lident l (Token_type.of_builtin Function) ();
       `Custom_iterator
     | _ -> `Default_iterator
+
+  let ppx_string_extension ~string ~string_loc ~delimiter : Parsetree.expression list =
+    let parse_result =
+      (* NOTE: This awkward dance is required as ppxlib's and ocamllsp's AST types
+         (including their locations!) are not type equal to each other. *)
+      let ({ loc_start; loc_end; loc_ghost } : Loc.t) = string_loc in
+      Ppx_string.parse
+        ~config:Ppx_string.config_for_string
+        ~string_loc:{ loc_start; loc_end; loc_ghost }
+        ~delimiter
+        string
+    in
+    match parse_result.locations_are_precise with
+    | false -> []
+    | true ->
+      (* We go through each interpolated part of the ppx, re-parse the contents using
+          merlin, correct the locations in the parsed AST using the location we get from
+          [Ppx_string], and then return the list of parsed expressions to be recursively
+          highlighted. *)
+      List.filter_map parse_result.parts ~f:(function
+        | Ppx_string.Part.Literal _ -> None
+        | Interpreted
+            { value = { pexp_loc = { loc_start = offset_start; _ }; _ }
+            ; interpreted_string
+            ; _
+            } ->
+          let offset ({ loc_start; loc_end; loc_ghost } : Loc.t) : Loc.t =
+            let add_positions (a : Lexing.position) (b : Lexing.position) =
+              { a with
+                (* Subtract 1 because line numbers start at 1 *)
+                pos_lnum = a.pos_lnum - 1 + b.pos_lnum
+              ; pos_bol = a.pos_bol + b.pos_bol
+              ; pos_cnum = a.pos_cnum + b.pos_cnum
+              }
+            in
+            let loc_start = add_positions loc_start offset_start in
+            let loc_end = add_positions loc_end offset_start in
+            { loc_start; loc_end; loc_ghost }
+          in
+          let map_offset
+                (self : Ast_mapper.mapper)
+                (expr : Parsetree.expression)
+            =
+            let pexp_desc : Parsetree.expression_desc =
+              match expr.pexp_desc with
+              | Pexp_apply (lhs, args) ->
+                let lhs = self.expr self lhs in
+                let args = List.map args ~f:(fun (label, e) -> label, self.expr self e) in
+                Pexp_apply (lhs, args)
+              | Pexp_ident { txt; loc } -> Pexp_ident { txt; loc = offset loc }
+              | Pexp_tuple parts -> Pexp_tuple (List.map parts ~f:(self.expr self))
+              | Pexp_construct ({ txt; loc }, e) ->
+                Pexp_construct
+                  ({ txt; loc = offset loc }, Option.map e ~f:(self.expr self))
+              | Pexp_variant (label, e) ->
+                Pexp_variant (label, Option.map e ~f:(self.expr self))
+              | Pexp_field (e, { txt; loc }) ->
+                Pexp_field (self.expr self e, { txt; loc = offset loc })
+              | _ -> expr.pexp_desc
+            in
+            { expr with pexp_desc; pexp_loc = offset expr.pexp_loc }
+          in
+          let mapper =
+            { Ast_mapper.default_mapper with expr = map_offset }
+          in
+          (* We'll recursively semantic highlight the interpolated expression (without the
+              #Module annotation) *)
+          let source =
+            Msource.make (String.split interpreted_string ~on:'#' |> List.hd)
+          in
+          let ({ parsetree; _ } : Mreader.result) =
+            Mreader.parse M.mconfig (source, None)
+          in
+          (match parsetree with
+            | `Interface _ -> None
+            | `Implementation structure ->
+              let structure = mapper.structure mapper structure in
+              (match structure with
+              | [] -> None
+              | items ->
+                let exprs =
+                  List.filter_map
+                    items
+                    ~f:(fun ({ pstr_desc; _ } : Parsetree.structure_item) ->
+                      match pstr_desc with
+                      | Pstr_eval (expr, _) -> Some expr
+                        (* A standalone expression is the only relevant kind node for the
+                            interpolated part of ppx_string *)
+                      | _ -> None)
+                in
+                Some exprs)))
+      |> List.concat
+  ;;
 
   let expr (self : Ast_iterator.iterator)
       ({ pexp_desc; pexp_loc; pexp_loc_stack = _; pexp_attributes } as exp :
@@ -639,6 +730,23 @@ end = struct
               <> 0 (* handles punning as in e.g. [let* foo in <expr>]*)
             then self.expr self pbop_exp);
         self.expr self body;
+        `Custom_iterator
+      | Pexp_extension
+        ( { txt = "string"; loc = _ }
+        , PStr
+            [ { pstr_desc =
+                  Pstr_eval
+                    ( { pexp_desc = Pexp_constant (Pconst_string (string, _, delimiter))
+                      ; pexp_loc = string_loc
+                      ; _
+                      }
+                    , _ )
+              ; _
+              }
+            ] ) ->
+        List.iter
+          (ppx_string_extension ~string ~string_loc ~delimiter)
+          ~f:(self.expr self);
         `Custom_iterator
       | Pexp_array _
       | Pexp_ifthenelse (_, _, _)
@@ -869,14 +977,16 @@ let gen_new_id =
     string_of_int x
 
 let compute_tokens doc =
-  let+ parsetree, source =
+  let* parsetree, source =
     Document.Merlin.with_pipeline_exn
       ~name:"semantic highlighting"
       doc
       (fun p -> (Mpipeline.reader_parsetree p, Mpipeline.input_source p))
   in
+  let+ config = Document.Merlin.mconfig doc in
   let module Fold = Parsetree_fold (struct
     let source = Msource.text source
+    let mconfig = config
   end) in
   Fold.apply parsetree
 
