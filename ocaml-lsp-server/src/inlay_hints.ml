@@ -17,6 +17,7 @@ let outline_type ~env typ =
 let hint_binding_iter ?(hint_let_bindings = false)
     ?(hint_pattern_variables = false)
     ?(hint_function_params = false) typedtree range k =
+  ignore hint_function_params;
   let module I = Ocaml_typing.Tast_iterator in
   (* to be used for pattern variables in match cases, but not for function
      arguments *)
@@ -38,23 +39,22 @@ let hint_binding_iter ?(hint_let_bindings = false)
   let expr (iter : I.iterator) (e : Typedtree.expression) =
     if range_overlaps_loc range e.exp_loc then
       match e.exp_desc with
-      | Texp_function {body; params; _ } ->
-        (match body with
-         | Tfunction_cases
-             { fc_cases
-             ; _
-             } ->
-           if hint_function_params then List.iter params ~f:(fun param ->
-            match param.fp_kind with
-            | Tparam_pat pat -> iter.pat iter pat
-            | Tparam_optional_default (pat, _, _) ->
-                iter.pat iter pat);
-           List.iter fc_cases ~f:(fun {c_lhs; c_rhs; _} ->
-            if hint_pattern_variables then iter.pat iter c_lhs;
-            iter.expr iter c_rhs)
-         | Tfunction_body body when not hint_function_params ->
-           iter.expr iter body
-         | _ -> I.default_iterator.expr iter e)
+      | Texp_function
+          { arg_label = Optional _
+          ; cases =
+              [ { c_rhs =
+                    { exp_desc = Texp_let (_, [ { vb_pat; _ } ], body); _ }
+                ; _
+                }
+              ]
+          ; _
+          } ->
+        iter.pat iter vb_pat;
+        iter.expr iter body
+      | Texp_function { cases; _ } ->
+        List.iter cases ~f:(fun ({ c_lhs; c_rhs; _ } : 'k Typedtree.case) ->
+          if hint_function_params then iter.pat iter c_lhs;
+          iter.expr iter c_rhs)
       | Texp_let (_, vbs, body) ->
         List.iter vbs ~f:(value_binding hint_let_bindings iter);
         iter.expr iter body
@@ -179,7 +179,7 @@ let hint_let_syntax_ppx_iter typer parsetree range create_inlay_hint =
   in
   let structure (iter : Ast_iterator.iterator) (items : Parsetree.structure) =
     let prev_let_syntax = !current_let_syntax in
-    let (_: bool) =  List.fold_left items ~init:false ~f:(fun should_push item ->
+    let (_: bool) =  List.fold_left items ~init:false ~f:(fun should_push (item : Parsetree.structure_item) ->
       if should_push then push_let_syntax item.pstr_loc.loc_end;
       iter.structure_item iter item;
       match item.pstr_desc with
